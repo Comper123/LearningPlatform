@@ -10,6 +10,7 @@ export async function listCourses(teacherId: string) {
       title: courses.title,
       level: courses.level,
       description: courses.description,
+      isPublic: courses.isPublic,
       topicCount: count(topics.id),
     })
     .from(courses)

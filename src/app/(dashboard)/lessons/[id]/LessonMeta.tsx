@@ -49,7 +49,11 @@ export function LessonMeta({
       </Card>
 
       <div>
-        <h2 className="mb-3 font-medium">Материалы занятия</h2>
+        <h2 className="mb-1 font-medium">Содержание урока</h2>
+        <p className="mb-3 text-sm text-muted">
+          Конспект, план, примеры кода — в Markdown. Файлы прикрепляются
+          отдельно, в блоке «Материалы урока» ниже.
+        </p>
         <MarkdownEditor
           name="content"
           defaultValue={content ?? ""}

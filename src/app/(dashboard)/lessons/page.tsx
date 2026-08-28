@@ -1,10 +1,12 @@
 import Link from "next/link";
 
 import { LessonCalendar, monthKey } from "@/components/LessonCalendar";
+import { ListControls } from "@/components/ListControls";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 import { allTopics } from "@/lib/courses/queries";
 import { groupOptions } from "@/lib/groups/queries";
 import { lessonStatus } from "@/lib/labels";
+import { matchesQuery } from "@/lib/list-utils";
 import { listLessons } from "@/lib/lessons/queries";
 import { listLessonsBetween } from "@/lib/schedule/queries";
 import { requireTeacher } from "@/lib/session";
@@ -29,9 +31,23 @@ function parseMonth(value: string | undefined) {
 export default async function LessonsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; view?: string }>;
+  searchParams: Promise<{
+    month?: string;
+    view?: string;
+    q?: string;
+    group?: string;
+    status?: string;
+    sort?: string;
+  }>;
 }) {
-  const { month: monthParam, view } = await searchParams;
+  const {
+    month: monthParam,
+    view,
+    q,
+    group,
+    status,
+    sort,
+  } = await searchParams;
   const teacher = await requireTeacher();
 
   const month = parseMonth(monthParam);
@@ -91,7 +107,45 @@ export default async function LessonsPage({
       </div>
 
       {isList ? (
-        <ListView lessons={allLessons} />
+        <>
+          <ListControls
+            search={{ placeholder: "Тема занятия" }}
+            filters={[
+              {
+                key: "group",
+                label: "Любая группа",
+                options: [
+                  { value: "", label: "Любая группа" },
+                  ...groups.map((g) => ({ value: g.title, label: g.title })),
+                ],
+              },
+              {
+                key: "status",
+                label: "Любой статус",
+                options: [
+                  { value: "", label: "Любой статус" },
+                  ...Object.entries(lessonStatus).map(([value, m]) => ({
+                    value,
+                    label: m.label,
+                  })),
+                ],
+              },
+            ]}
+            sort={[
+              { value: "date_desc", label: "Сначала недавние" },
+              { value: "date_asc", label: "Сначала ранние" },
+            ]}
+          />
+          <ListView
+            lessons={allLessons.filter(
+              (l) =>
+                matchesQuery(q, l.title, l.groupTitle) &&
+                (!group || l.groupTitle === group) &&
+                (!status || l.status === status),
+            )}
+            sort={sort}
+          />
+        </>
       ) : (
         <LessonCalendar month={month} lessons={calendarLessons} />
       )}
@@ -124,10 +178,24 @@ function ViewTab({
 
 type LessonRow = Awaited<ReturnType<typeof listLessons>>[number];
 
-function ListView({ lessons }: { lessons: LessonRow[] }) {
+function ListView({
+  lessons,
+  sort,
+}: {
+  lessons: LessonRow[];
+  sort?: string;
+}) {
   const now = Date.now();
-  const upcoming = lessons.filter((l) => l.startsAt.getTime() >= now).reverse();
-  const past = lessons.filter((l) => l.startsAt.getTime() < now);
+  const dir = sort === "date_asc" ? 1 : -1;
+  const ordered = [...lessons].sort(
+    (a, b) => dir * (a.startsAt.getTime() - b.startsAt.getTime()),
+  );
+  const upcoming = ordered
+    .filter((l) => l.startsAt.getTime() >= now)
+    .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+  const past = ordered
+    .filter((l) => l.startsAt.getTime() < now)
+    .sort((a, b) => dir * (a.startsAt.getTime() - b.startsAt.getTime()));
 
   return (
     <>

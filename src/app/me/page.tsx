@@ -1,92 +1,78 @@
-import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
-import { attendanceStatus } from "@/lib/labels";
-import { listStudentAttendance } from "@/lib/lessons/queries";
-import { requireStudent } from "@/lib/session";
-import { listStudentGroups } from "@/lib/students/queries";
+import Link from "next/link";
 
-const dateFormat = new Intl.DateTimeFormat("ru-RU", {
-  day: "2-digit",
-  month: "short",
-});
+import { Card, EmptyState, PageHeader } from "@/components/ui";
+import { listStudentCourseRequests } from "@/lib/courses/public";
+import { listEnrolledCourses } from "@/lib/courses/workspace";
+import { requireStudent } from "@/lib/session";
 
 export default async function StudentHomePage() {
   const { student } = await requireStudent();
 
-  const [groups, attendance] = await Promise.all([
-    listStudentGroups(student.id),
-    listStudentAttendance(student.id),
+  const [enrolled, requests] = await Promise.all([
+    listEnrolledCourses(student.id),
+    listStudentCourseRequests(student.id),
   ]);
 
-  const attended = attendance.filter(
-    (a) => a.status === "present" || a.status === "late",
-  ).length;
+  const pending = requests.filter((r) => r.status === "pending");
 
   return (
     <>
       <PageHeader
-        title="Мой кабинет"
-        description="Занятия, посещаемость и прогресс"
+        title="Мои курсы"
+        description="Всё по каждому курсу — на его странице"
+        action={
+          <Link
+            href="/catalog"
+            className="rounded-lg border border-border px-4 py-2 text-sm transition hover:bg-surface-2"
+          >
+            Каталог курсов
+          </Link>
+        }
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card className="p-5">
-          <p className="text-sm text-muted">Групп</p>
-          <p className="mt-2 text-3xl font-semibold">{groups.length}</p>
-        </Card>
-        <Card className="p-5">
-          <p className="text-sm text-muted">Занятий отмечено</p>
-          <p className="mt-2 text-3xl font-semibold">{attendance.length}</p>
-        </Card>
-        <Card className="p-5">
-          <p className="text-sm text-muted">Из них посещено</p>
-          <p className="mt-2 text-3xl font-semibold">{attended}</p>
-        </Card>
-      </div>
+      {enrolled.length === 0 ? (
+        <EmptyState>
+          Вы пока не записаны ни на один курс.{" "}
+          <Link href="/catalog" className="text-accent hover:underline">
+            Открыть каталог
+          </Link>
+        </EmptyState>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {enrolled.map((course) => (
+            <Link key={course.id} href={`/me/courses/${course.id}`}>
+              <Card className="h-full p-5 transition hover:border-accent">
+                <h2 className="font-medium">{course.title}</h2>
+                {course.level && (
+                  <p className="mt-1 text-xs text-muted">{course.level}</p>
+                )}
+                <p className="mt-3 text-sm text-muted">
+                  Группа: {course.groupTitle}
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  Преподаватель: {course.teacherName}
+                </p>
+              </Card>
+            </Link>
+          ))}
+        </div>
+      )}
 
-      <section className="mt-8">
-        <h2 className="mb-3 font-medium">Мои группы</h2>
-        {groups.length === 0 ? (
-          <EmptyState>
-            Преподаватель ещё не записал вас в группу.
-          </EmptyState>
-        ) : (
+      {pending.length > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-3 font-medium">Заявки на курсы</h2>
           <Card className="divide-y divide-border">
-            {groups.map((group) => (
-              <p key={group.id} className="px-4 py-3 text-sm">
-                {group.title}
+            {pending.map((r) => (
+              <p key={r.courseId} className="px-4 py-3 text-sm">
+                {r.courseTitle}
+                <span className="ml-2 text-xs text-sky-600 dark:text-sky-400">
+                  ждёт подтверждения
+                </span>
               </p>
             ))}
           </Card>
-        )}
-      </section>
-
-      <section className="mt-8">
-        <h2 className="mb-3 font-medium">История занятий</h2>
-        {attendance.length === 0 ? (
-          <EmptyState>Отметок о посещении пока нет.</EmptyState>
-        ) : (
-          <Card className="divide-y divide-border">
-            {attendance.map((row) => (
-              <div
-                key={row.lessonId}
-                className="flex items-center justify-between gap-4 px-4 py-3"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{row.title}</p>
-                  <p className="mt-0.5 text-xs text-muted">{row.groupTitle}</p>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-3">
-                  <span className="text-xs text-muted">
-                    {dateFormat.format(row.startsAt)}
-                  </span>
-                  <Badge {...attendanceStatus[row.status]} />
-                </div>
-              </div>
-            ))}
-          </Card>
-        )}
-      </section>
+        </section>
+      )}
     </>
   );
 }

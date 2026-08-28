@@ -90,6 +90,49 @@ export async function listLessonAttendance(groupId: string, lessonId: string) {
     .orderBy(asc(students.fullName));
 }
 
+/**
+ * Аналитика занятия: как распределилась посещаемость и сколько человек
+ * из состава группы вообще отмечены.
+ */
+export async function getLessonAnalytics(groupId: string, lessonId: string) {
+  const rows = await db
+    .select({
+      studentId: students.id,
+      status: attendance.status,
+    })
+    .from(enrollments)
+    .innerJoin(students, eq(students.id, enrollments.studentId))
+    .leftJoin(
+      attendance,
+      and(
+        eq(attendance.studentId, students.id),
+        eq(attendance.lessonId, lessonId),
+      ),
+    )
+    .where(and(eq(enrollments.groupId, groupId), isNull(enrollments.leftAt)));
+
+  const counts = { present: 0, absent: 0, late: 0, excused: 0 };
+  let marked = 0;
+
+  for (const row of rows) {
+    if (row.status) {
+      marked++;
+      counts[row.status] += 1;
+    }
+  }
+
+  const rosterSize = rows.length;
+  const attended = counts.present + counts.late;
+
+  return {
+    rosterSize,
+    marked,
+    counts,
+    // Процент считаем от отмеченных: неотмеченных ещё не оценили.
+    attendanceRate: marked ? Math.round((attended / marked) * 100) : null,
+  };
+}
+
 /** Материалы, прикреплённые к занятию. */
 export async function listLessonFiles(lessonId: string) {
   return db

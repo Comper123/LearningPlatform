@@ -127,6 +127,7 @@ async function main() {
   const {
     assignments,
     attendance,
+    courseRequests,
     courses,
     enrollments,
     groups,
@@ -134,6 +135,13 @@ async function main() {
     scheduleSlots,
     students,
     submissions,
+    teacherProfiles,
+    testAnswers,
+    testAttempts,
+    testGroups,
+    testOptions,
+    testQuestions,
+    tests,
     topicProgress,
     topics,
     users,
@@ -218,8 +226,22 @@ async function main() {
       )
       .returning({ id: courses.id });
 
+    const removedTests = await db
+      .delete(tests)
+      .where(
+        and(
+          eq(tests.teacherId, teacher.id),
+          inArray(tests.title, [
+            "Python: переменные и типы",
+            "JS: DOM и события",
+          ]),
+        ),
+      )
+      .returning({ id: tests.id });
+
     console.log(
-      `Удалено: курсов ${removedCourses.length}, групп ${removedGroups.length}, учеников ${removedStudents.length}`,
+      `Удалено: курсов ${removedCourses.length}, групп ${removedGroups.length}, ` +
+        `учеников ${removedStudents.length}, тестов ${removedTests.length}`,
     );
     return;
   }
@@ -243,12 +265,30 @@ async function main() {
 
   console.log(`Наполняю данные для ${teacher.email}\n`);
 
+  /* --------------------------------------------------- профиль преподавателя */
+
+  await db
+    .insert(teacherProfiles)
+    .values({
+      userId: teacher.id,
+      inviteCode: "DEMO-2026",
+      headline: "Преподаватель Python и веб-разработки",
+      bio: "Готовлю с нуля до первого проекта. Практика на каждом занятии, разбор кода лично.",
+    })
+    .onConflictDoUpdate({
+      target: teacherProfiles.userId,
+      set: {
+        headline: "Преподаватель Python и веб-разработки",
+        bio: "Готовлю с нуля до первого проекта. Практика на каждом занятии, разбор кода лично.",
+      },
+    });
+
   /* --------------------------------------------------- курсы и программа */
 
   const courseIds: string[] = [];
   const topicsByCourse = new Map<string, { id: string; title: string }[]>();
 
-  for (const course of COURSES) {
+  for (const [ci, course] of COURSES.entries()) {
     const [created] = await db
       .insert(courses)
       .values({
@@ -256,6 +296,10 @@ async function main() {
         title: course.title,
         level: course.level,
         description: course.description,
+        // Первый курс — публичный, с открытой записью.
+        isPublic: ci === 0,
+        slug: ci === 0 ? "python-start" : null,
+        enrollmentOpen: true,
       })
       .returning({ id: courses.id });
 
@@ -407,18 +451,19 @@ async function main() {
 
     const rows = occurrences.map((occurrence, i) => {
       const topic = courseTopics[i];
+      const past = occurrence.startsAt < now;
+
       return {
         groupId,
         startsAt: occurrence.startsAt,
         durationMin: occurrence.durationMin,
         topicId: topic?.id ?? null,
         title: topic?.title ?? `Занятие ${i + 1}`,
-        status:
-          occurrence.startsAt < now ? ("done" as const) : ("planned" as const),
-        summary:
-          occurrence.startsAt < now
-            ? "Разобрали теорию, решили задачи из практикума."
-            : null,
+        status: past ? ("done" as const) : ("planned" as const),
+        summary: past ? "Разобрали теорию, решили задачи из практикума." : null,
+        content: past
+          ? `## План\n\n1. Повторение прошлой темы\n2. ${topic?.title ?? "Новый материал"}\n3. Практика\n\n\`\`\`python\n# пример с занятия\nfor i in range(5):\n    print(i * i)\n\`\`\`\n\n**Дома:** задачи 1–5 из практикума.`
+          : null,
       };
     });
 
@@ -600,6 +645,168 @@ async function main() {
   }
 
   console.log(`Оценок прогресса: ${progressRows.length}`);
+
+  /* -------------------------------------------------------------- тесты */
+
+  const TESTS = [
+    {
+      title: "Python: переменные и типы",
+      timeLimitMin: 15,
+      groupIdx: 0,
+      questions: [
+        { type: "single" as const, prompt: "Что выведет print(type(5))?", points: 1, options: ["*<class 'int'>", "<class 'float'>", "int", "number"] },
+        { type: "single" as const, prompt: "Как объявить строку?", points: 1, options: ["*s = \"текст\"", "s := текст", "string s = текст"] },
+        { type: "multiple" as const, prompt: "Какие значения — истинны (truthy)?", points: 2, options: ["*1", "*\"a\"", "0", "[]", "None"] },
+        { type: "text" as const, prompt: "Чем список отличается от кортежа?", points: 3, options: [] },
+      ],
+    },
+    {
+      title: "JS: DOM и события",
+      timeLimitMin: 20,
+      groupIdx: 2,
+      questions: [
+        { type: "single" as const, prompt: "Как найти элемент по id 'app'?", points: 1, options: ["*document.getElementById('app')", "document.query('#app')", "$('app')"] },
+        { type: "single" as const, prompt: "Какое событие — клик мышью?", points: 1, options: ["*click", "onpress", "tap"] },
+        { type: "multiple" as const, prompt: "Что относится к методам массива?", points: 2, options: ["*map", "*filter", "each", "loop"] },
+      ],
+    },
+  ];
+
+  let testCount = 0;
+  let attemptCount = 0;
+
+  for (const spec of TESTS) {
+    const [test] = await db
+      .insert(tests)
+      .values({
+        teacherId: teacher.id,
+        title: spec.title,
+        description: "Демо-тест для проверки раздела аналитики.",
+        timeLimitMin: spec.timeLimitMin,
+        status: "published",
+      })
+      .returning({ id: tests.id });
+
+    testCount++;
+    await db.insert(testGroups).values({ testId: test.id, groupId: groupIds[spec.groupIdx] });
+
+    const createdQuestions: {
+      id: string;
+      type: string;
+      points: number;
+      correct: string[];
+      wrong: string[];
+    }[] = [];
+
+    for (const [qi, q] of spec.questions.entries()) {
+      const [question] = await db
+        .insert(testQuestions)
+        .values({ testId: test.id, type: q.type, prompt: q.prompt, points: q.points, position: qi + 1 })
+        .returning({ id: testQuestions.id });
+
+      const correct: string[] = [];
+      const wrong: string[] = [];
+      if (q.options.length > 0) {
+        const opts = await db
+          .insert(testOptions)
+          .values(
+            q.options.map((line, oi) => ({
+              questionId: question.id,
+              text: line.replace(/^\*/, ""),
+              isCorrect: line.startsWith("*"),
+              position: oi + 1,
+            })),
+          )
+          .returning({ id: testOptions.id, isCorrect: testOptions.isCorrect });
+        for (const o of opts) (o.isCorrect ? correct : wrong).push(o.id);
+      }
+
+      createdQuestions.push({ id: question.id, type: q.type, points: q.points, correct, wrong });
+    }
+
+    // Часть учеников группы прошли тест.
+    const maxScore = spec.questions.reduce((s, q) => s + q.points, 0);
+
+    for (const student of membership[spec.groupIdx]) {
+      if (random() < 0.35) continue; // не все успели
+
+      const startedAt = new Date(now.getTime() - (1 + random() * 5) * 86400000);
+      let autoScore = 0;
+      let needsReview = false;
+
+      const answerRows = createdQuestions.map((q) => {
+        if (q.type === "text") {
+          needsReview = true;
+          return {
+            questionId: q.id,
+            optionIds: [] as string[],
+            text: "Список изменяемый, кортеж — нет.",
+            isCorrect: null as boolean | null,
+            awardedPoints: null as number | null,
+          };
+        }
+        // 75% верно; неверный ответ — реально выбранный неправильный вариант
+        const ok = random() < 0.75;
+        const chosen = ok
+          ? q.correct
+          : q.wrong.length
+            ? [q.wrong[Math.floor(random() * q.wrong.length)]]
+            : q.correct.slice(0, 1);
+        if (ok) autoScore += q.points;
+        return {
+          questionId: q.id,
+          optionIds: chosen,
+          text: null,
+          isCorrect: ok,
+          awardedPoints: ok ? q.points : 0,
+        };
+      });
+
+      const [attempt] = await db
+        .insert(testAttempts)
+        .values({
+          testId: test.id,
+          studentId: student.id,
+          startedAt,
+          expiresAt: new Date(startedAt.getTime() + spec.timeLimitMin * 60000),
+          submittedAt: new Date(startedAt.getTime() + (5 + random() * 8) * 60000),
+          autoSubmitted: random() < 0.2,
+          autoScore,
+          maxScore,
+          score: needsReview ? null : autoScore,
+        })
+        .returning({ id: testAttempts.id });
+
+      await db.insert(testAnswers).values(
+        answerRows.map((a) => ({ ...a, attemptId: attempt.id })),
+      );
+      attemptCount++;
+    }
+  }
+
+  console.log(`Тестов: ${testCount}, попыток: ${attemptCount}`);
+
+  /* --------------------------------------------- заявки на публичный курс */
+
+  // Двое «свободных» учеников подали заявку на публичный курс.
+  const freeStudents = await db
+    .insert(students)
+    .values([
+      { teacherId: teacher.id, fullName: "Тимур Хабиров", email: "timur@example.com", status: "pending" as const },
+      { teacherId: teacher.id, fullName: "Ольга Кравец", email: "olga@example.com", status: "pending" as const },
+    ])
+    .returning({ id: students.id });
+
+  await db.insert(courseRequests).values(
+    freeStudents.map((s) => ({
+      courseId: courseIds[0],
+      studentId: s.id,
+      message: "Хочу с нуля, свободного времени — вечера будни.",
+    })),
+  );
+
+  console.log(`Заявок на курс: ${freeStudents.length}`);
+
   console.log("\nГотово.");
 }
 

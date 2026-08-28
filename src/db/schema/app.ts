@@ -1,8 +1,10 @@
 import { relations } from "drizzle-orm";
 import {
+  boolean,
   date,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -44,6 +46,14 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
   "excused", // отсутствовал по уважительной причине
 ]);
 
+export const testStatusEnum = pgEnum("test_status", ["draft", "published"]);
+
+export const questionTypeEnum = pgEnum("question_type", [
+  "single", // один верный вариант
+  "multiple", // несколько верных вариантов
+  "text", // свободный ответ, проверяет преподаватель
+]);
+
 export const submissionStatusEnum = pgEnum("submission_status", [
   "assigned", // выдано, ученик ещё не сдал
   "submitted", // сдано, ждёт проверки
@@ -57,9 +67,14 @@ export const students = pgTable(
   "students",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    teacherId: text("teacher_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    /**
+     * Преподаватель, за которым закреплён ученик. NULL — «свободный»
+     * ученик: зарегистрировался сам без кода и ещё не записан ни на один
+     * курс. Проставляется, когда преподаватель одобряет заявку на курс.
+     */
+    teacherId: text("teacher_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
     /**
      * Аккаунт ученика, если он завёл вход. Пусто — карточку создал
      * преподаватель, а ученик ещё ни разу не заходил.
@@ -94,11 +109,51 @@ export const courses = pgTable(
     description: text("description"),
     /** Например: "Python, начальный" */
     level: text("level"),
+    /** Виден в публичном каталоге и по ссылке /c/<slug>. */
+    isPublic: boolean("is_public").notNull().default(false),
+    /** Кусок URL публичной страницы. Уникален среди публичных курсов. */
+    slug: text("slug").unique(),
+    /** Принимать ли заявки на запись прямо сейчас. */
+    enrollmentOpen: boolean("enrollment_open").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (t) => [index("courses_teacher_idx").on(t.teacherId)],
+);
+
+export const courseRequestStatusEnum = pgEnum("course_request_status", [
+  "pending",
+  "approved",
+  "rejected",
+]);
+
+/**
+ * Заявка ученика на публичный курс. Одобряя её, преподаватель выбирает
+ * группу, и появляется запись в `enrollments`.
+ */
+export const courseRequests = pgTable(
+  "course_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id, { onDelete: "cascade" }),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    status: courseRequestStatusEnum("status").notNull().default("pending"),
+    /** Необязательная записка от ученика. */
+    message: text("message"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("course_requests_unique").on(t.courseId, t.studentId),
+    index("course_requests_course_idx").on(t.courseId),
+  ],
 );
 
 /** Программа курса: упорядоченный список тем. */
@@ -307,6 +362,144 @@ export const submissions = pgTable(
   ],
 );
 
+/* ------------------------------------------------------------------ tests */
+
+/**
+ * Тест: набор вопросов с ограничением по времени и окном доступности.
+ * Назначается на группы через `testGroups`.
+ */
+export const tests = pgTable(
+  "tests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teacherId: text("teacher_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    topicId: uuid("topic_id").references(() => topics.id, {
+      onDelete: "set null",
+    }),
+    title: text("title").notNull(),
+    description: text("description"),
+    /** Лимит на прохождение в минутах. NULL — без ограничения. */
+    timeLimitMin: integer("time_limit_min"),
+    /** Окно доступности. Вне окна начать попытку нельзя. */
+    opensAt: timestamp("opens_at", { withTimezone: true }),
+    closesAt: timestamp("closes_at", { withTimezone: true }),
+    /** Показывать ли ученику правильные ответы после сдачи. */
+    revealAnswers: boolean("reveal_answers").notNull().default(true),
+    status: testStatusEnum("status").notNull().default("draft"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("tests_teacher_idx").on(t.teacherId)],
+);
+
+export const testQuestions = pgTable(
+  "test_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    type: questionTypeEnum("type").notNull().default("single"),
+    prompt: text("prompt").notNull(),
+    points: smallint("points").notNull().default(1),
+  },
+  (t) => [index("test_questions_test_idx").on(t.testId)],
+);
+
+export const testOptions = pgTable(
+  "test_options",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => testQuestions.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    text: text("text").notNull(),
+    isCorrect: boolean("is_correct").notNull().default(false),
+  },
+  (t) => [index("test_options_question_idx").on(t.questionId)],
+);
+
+/** Тест ↔ группа. */
+export const testGroups = pgTable(
+  "test_groups",
+  {
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => groups.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.testId, t.groupId] })],
+);
+
+/**
+ * Попытка прохождения — одна на ученика и тест.
+ * `submittedAt IS NULL` — попытка ещё идёт; к ней можно вернуться, пока
+ * `now < expiresAt`. `expiresAt` фиксируется в момент старта.
+ */
+export const testAttempts = pgTable(
+  "test_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    testId: uuid("test_id")
+      .notNull()
+      .references(() => tests.id, { onDelete: "cascade" }),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** startedAt + лимит. NULL — теста без лимита времени. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    /** true — сдана по истечении времени, а не вручную. */
+    autoSubmitted: boolean("auto_submitted").notNull().default(false),
+    /** Автосумма по вопросам с автопроверкой. */
+    autoScore: smallint("auto_score"),
+    /** Финальный балл после проверки свободных ответов. */
+    score: smallint("score"),
+    maxScore: smallint("max_score").notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex("test_attempts_unique").on(t.testId, t.studentId),
+    index("test_attempts_student_idx").on(t.studentId),
+  ],
+);
+
+/**
+ * Ответ на один вопрос. Сохраняется по ходу прохождения, поэтому при
+ * возврате к тесту ученик видит уже отмеченное.
+ */
+export const testAnswers = pgTable(
+  "test_answers",
+  {
+    attemptId: uuid("attempt_id")
+      .notNull()
+      .references(() => testAttempts.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => testQuestions.id, { onDelete: "cascade" }),
+    /** Отмеченные варианты (id из testOptions). */
+    optionIds: jsonb("option_ids").$type<string[]>().notNull().default([]),
+    /** Текст свободного ответа. */
+    text: text("text"),
+    /** Проставляется при проверке: верен ли ответ и сколько баллов дал. */
+    isCorrect: boolean("is_correct"),
+    awardedPoints: smallint("awarded_points"),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.attemptId, t.questionId] })],
+);
+
 /* --------------------------------------------------------------- progress */
 
 /** Уровень освоения темы учеником: 0 — не начата, 5 — уверенно владеет. */
@@ -343,6 +536,18 @@ export const studentsRelations = relations(students, ({ many }) => ({
 export const coursesRelations = relations(courses, ({ many }) => ({
   topics: many(topics),
   groups: many(groups),
+  requests: many(courseRequests),
+}));
+
+export const courseRequestsRelations = relations(courseRequests, ({ one }) => ({
+  course: one(courses, {
+    fields: [courseRequests.courseId],
+    references: [courses.id],
+  }),
+  student: one(students, {
+    fields: [courseRequests.studentId],
+    references: [students.id],
+  }),
 }));
 
 export const topicsRelations = relations(topics, ({ one, many }) => ({
@@ -445,5 +650,64 @@ export const topicProgressRelations = relations(topicProgress, ({ one }) => ({
   topic: one(topics, {
     fields: [topicProgress.topicId],
     references: [topics.id],
+  }),
+}));
+
+export const testsRelations = relations(tests, ({ one, many }) => ({
+  topic: one(topics, {
+    fields: [tests.topicId],
+    references: [topics.id],
+  }),
+  questions: many(testQuestions),
+  testGroups: many(testGroups),
+  attempts: many(testAttempts),
+}));
+
+export const testQuestionsRelations = relations(
+  testQuestions,
+  ({ one, many }) => ({
+    test: one(tests, {
+      fields: [testQuestions.testId],
+      references: [tests.id],
+    }),
+    options: many(testOptions),
+  }),
+);
+
+export const testOptionsRelations = relations(testOptions, ({ one }) => ({
+  question: one(testQuestions, {
+    fields: [testOptions.questionId],
+    references: [testQuestions.id],
+  }),
+}));
+
+export const testGroupsRelations = relations(testGroups, ({ one }) => ({
+  test: one(tests, { fields: [testGroups.testId], references: [tests.id] }),
+  group: one(groups, { fields: [testGroups.groupId], references: [groups.id] }),
+}));
+
+export const testAttemptsRelations = relations(
+  testAttempts,
+  ({ one, many }) => ({
+    test: one(tests, {
+      fields: [testAttempts.testId],
+      references: [tests.id],
+    }),
+    student: one(students, {
+      fields: [testAttempts.studentId],
+      references: [students.id],
+    }),
+    answers: many(testAnswers),
+  }),
+);
+
+export const testAnswersRelations = relations(testAnswers, ({ one }) => ({
+  attempt: one(testAttempts, {
+    fields: [testAnswers.attemptId],
+    references: [testAttempts.id],
+  }),
+  question: one(testQuestions, {
+    fields: [testAnswers.questionId],
+    references: [testQuestions.id],
   }),
 }));

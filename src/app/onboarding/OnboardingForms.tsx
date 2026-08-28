@@ -36,11 +36,12 @@ export function OnboardingForms({ defaultName }: { defaultName: string }) {
 
       <div className="mt-5">
         {choice === "student" ? (
-          <AuthForm action={onboardAsStudent} submitLabel="Присоединиться">
+          <AuthForm action={onboardAsStudent} submitLabel="Продолжить">
             <NameField defaultValue={defaultName} />
             <CodeField
-              label="Код преподавателя"
-              hint="Код выдаёт преподаватель — он привяжет вас к его группам."
+              label="Код преподавателя (необязательно)"
+              required={false}
+              hint="Без кода вы попадёте в каталог курсов и сможете записаться сами."
             />
           </AuthForm>
         ) : (

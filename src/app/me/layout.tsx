@@ -20,13 +20,19 @@ export default async function StudentLayout({
 
         <div className="flex items-center gap-5 text-sm">
           <Link href="/me" className="text-muted transition hover:text-foreground">
-            Кабинет
+            Мои курсы
           </Link>
           <Link
-            href="/me/homework"
+            href="/catalog"
             className="text-muted transition hover:text-foreground"
           >
-            Домашние задания
+            Каталог
+          </Link>
+          <Link
+            href="/me/profile"
+            className="text-muted transition hover:text-foreground"
+          >
+            Профиль
           </Link>
 
           <form

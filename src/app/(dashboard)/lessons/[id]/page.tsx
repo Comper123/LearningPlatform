@@ -1,12 +1,19 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { Badge, EmptyState, PageHeader } from "@/components/ui";
-import { lessonStatus } from "@/lib/labels";
-import { getLesson, listLessonAttendance } from "@/lib/lessons/queries";
+import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { attendanceStatus, lessonStatus } from "@/lib/labels";
+import {
+  getLesson,
+  getLessonAnalytics,
+  listLessonAttendance,
+  listLessonFiles,
+} from "@/lib/lessons/queries";
 import { requireTeacher } from "@/lib/session";
+import { signedUrl, storageEnabled } from "@/lib/storage";
 
 import { AttendanceForm } from "./AttendanceForm";
+import { LessonFiles } from "./LessonFiles";
 import { LessonMeta } from "./LessonMeta";
 
 const dateFormat = new Intl.DateTimeFormat("ru-RU", {
@@ -28,9 +35,10 @@ export default async function LessonPage({
 
   if (!lesson) notFound();
 
-  const [rows, files] = await Promise.all([
+  const [rows, files, analytics] = await Promise.all([
     listLessonAttendance(lesson.groupId, lesson.id),
     listLessonFiles(lesson.id),
+    getLessonAnalytics(lesson.groupId, lesson.id),
   ]);
 
   // Бакет закрытый, поэтому ссылки подписываем на сервере.
@@ -76,6 +84,65 @@ export default async function LessonPage({
         summary={lesson.summary}
         content={lesson.content}
       />
+
+      <section className="mt-8">
+        <h2 className="mb-4 font-medium">Материалы урока</h2>
+        <LessonFiles
+          lessonId={lesson.id}
+          files={materials}
+          storageEnabled={storageEnabled}
+        />
+      </section>
+
+      {analytics.marked > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-4 font-medium">Аналитика занятия</h2>
+          <Card className="p-5">
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+              <p className="text-sm">
+                <span className="text-muted">Явка: </span>
+                <span className="text-lg font-semibold tabular-nums">
+                  {analytics.attendanceRate}%
+                </span>
+              </p>
+              <p className="text-sm text-muted">
+                Отмечено {analytics.marked} из {analytics.rosterSize}
+              </p>
+            </div>
+
+            <div className="mt-4 flex h-3 overflow-hidden rounded-full bg-surface-2">
+              {(["present", "late", "excused", "absent"] as const).map((key) =>
+                analytics.counts[key] > 0 ? (
+                  <div
+                    key={key}
+                    title={`${attendanceStatus[key].label}: ${analytics.counts[key]}`}
+                    className={
+                      key === "present"
+                        ? "bg-emerald-500"
+                        : key === "late"
+                          ? "bg-amber-500"
+                          : key === "excused"
+                            ? "bg-sky-500"
+                            : "bg-red-500"
+                    }
+                    style={{
+                      width: `${(analytics.counts[key] / analytics.marked) * 100}%`,
+                    }}
+                  />
+                ) : null,
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+              {(["present", "late", "excused", "absent"] as const).map((key) => (
+                <span key={key}>
+                  {attendanceStatus[key].label}: {analytics.counts[key]}
+                </span>
+              ))}
+            </div>
+          </Card>
+        </section>
+      )}
 
       <section className="mt-8">
         <h2 className="mb-4 font-medium">Посещаемость</h2>

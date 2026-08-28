@@ -11,8 +11,11 @@ import { createGroup } from "@/lib/groups/actions";
 
 export function GroupForm({
   courses,
+  fixedCourseId,
 }: {
   courses: { id: string; title: string }[];
+  /** Если задан — курс не выбирается, группа сразу привязана к нему. */
+  fixedCourseId?: string;
 }) {
   const [state, action] = useActionState<FormState, FormData>(createGroup, {});
 
@@ -22,16 +25,20 @@ export function GroupForm({
         <Input name="title" required placeholder="Python-1, вторник" />
       </Field>
 
-      <Field label="Курс">
-        <Select
-          name="courseId"
-          placeholder="Без курса"
-          options={[
-            { value: "", label: "Без курса" },
-            ...courses.map((c) => ({ value: c.id, label: c.title })),
-          ]}
-        />
-      </Field>
+      {fixedCourseId ? (
+        <input type="hidden" name="courseId" value={fixedCourseId} />
+      ) : (
+        <Field label="Курс">
+          <Select
+            name="courseId"
+            placeholder="Без курса"
+            options={[
+              { value: "", label: "Без курса" },
+              ...courses.map((c) => ({ value: c.id, label: c.title })),
+            ]}
+          />
+        </Field>
+      )}
 
       <Field label="Расписание">
         <Input name="scheduleNote" placeholder="Пн, Ср 18:00" />

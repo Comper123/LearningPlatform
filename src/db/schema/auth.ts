@@ -47,6 +47,10 @@ export const teacherProfiles = pgTable("teacher_profiles", {
     .primaryKey()
     .references(() => users.id, { onDelete: "cascade" }),
   inviteCode: text("invite_code").notNull().unique(),
+  /** Короткая подпись под именем на публичных страницах курсов. */
+  headline: text("headline"),
+  /** Свободный рассказ о себе — виден в каталоге. */
+  bio: text("bio"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -2,7 +2,13 @@ import bcrypt from "bcryptjs";
 import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { students, teacherProfiles, users } from "@/db/schema";
+import {
+  courseRequests,
+  courses,
+  students,
+  teacherProfiles,
+  users,
+} from "@/db/schema";
 
 export type Role = "pending" | "teacher" | "student";
 
@@ -105,6 +111,41 @@ export async function findStudentByUser(userId: string) {
   return student ?? null;
 }
 
+/**
+ * Заводит «свободного» ученика: без кода и без преподавателя. Он может
+ * смотреть каталог и записываться на публичные курсы; преподаватель
+ * появится, когда одобрит первую заявку.
+ */
+export async function createFreeStudent(
+  userId: string,
+  fullName: string,
+  email?: string | null,
+) {
+  await db.update(users).set({ role: "student" }).where(eq(users.id, userId));
+
+  const existing = await findStudentByUser(userId);
+  if (existing) return existing;
+
+  // Карточка могла быть заведена преподавателем заранее на этот email.
+  if (email) {
+    const linkedId = await linkStudentByEmail(userId, email);
+    if (linkedId) return findStudentByUser(userId);
+  }
+
+  const [created] = await db
+    .insert(students)
+    .values({
+      teacherId: null,
+      userId,
+      fullName: fullName.trim(),
+      email: email ?? null,
+      status: "active",
+    })
+    .returning();
+
+  return created;
+}
+
 /** Преподаватель по коду приглашения. */
 export async function findTeacherByInviteCode(code: string) {
   const [teacher] = await db
@@ -144,6 +185,65 @@ export async function joinAsStudent(
   });
 
   await db.update(users).set({ role: "student" }).where(eq(users.id, userId));
+
+  return null;
+}
+
+/**
+ * Регистрация через публичный курс: кода нет, преподаватель определяется
+ * курсом. Создаёт карточку ученика и заявку на курс.
+ * Возвращает текст ошибки или null.
+ */
+export async function joinViaPublicCourse(
+  userId: string,
+  courseSlug: string,
+  fullName: string,
+  email?: string | null,
+) {
+  const [course] = await db
+    .select({
+      id: courses.id,
+      teacherId: courses.teacherId,
+      isPublic: courses.isPublic,
+      enrollmentOpen: courses.enrollmentOpen,
+    })
+    .from(courses)
+    .where(eq(courses.slug, courseSlug))
+    .limit(1);
+
+  if (!course || !course.isPublic) return "Курс не найден";
+  if (!course.enrollmentOpen) return "Запись на курс закрыта";
+
+  let student = await findStudentByUser(userId);
+
+  if (!student && email) {
+    const linkedId = await linkStudentByEmail(userId, email);
+    if (linkedId) student = await findStudentByUser(userId);
+  }
+
+  if (!student) {
+    const [created] = await db
+      .insert(students)
+      .values({
+        teacherId: course.teacherId,
+        userId,
+        fullName: fullName.trim(),
+        email: email ?? null,
+        status: "pending",
+      })
+      .returning();
+    student = created;
+  }
+
+  await db.update(users).set({ role: "student" }).where(eq(users.id, userId));
+
+  await db
+    .insert(courseRequests)
+    .values({ courseId: course.id, studentId: student.id })
+    .onConflictDoUpdate({
+      target: [courseRequests.courseId, courseRequests.studentId],
+      set: { status: "pending", createdAt: new Date(), decidedAt: null },
+    });
 
   return null;
 }

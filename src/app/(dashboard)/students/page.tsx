@@ -1,7 +1,9 @@
 import Link from "next/link";
 
+import { ListControls } from "@/components/ListControls";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 import { studentStatus } from "@/lib/labels";
+import { matchesQuery, pickSort, text } from "@/lib/list-utils";
 import { ensureTeacherProfile } from "@/lib/registration";
 import { requireTeacher } from "@/lib/session";
 import { listPendingRequests, listStudents } from "@/lib/students/queries";
@@ -9,17 +11,39 @@ import { listPendingRequests, listStudents } from "@/lib/students/queries";
 import { RequestList } from "./RequestList";
 import { StudentForm } from "./StudentForm";
 
-export default async function StudentsPage() {
+export default async function StudentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; status?: string; sort?: string }>;
+}) {
+  const { q, status, sort } = await searchParams;
   const teacher = await requireTeacher();
-  const [students, requests, profile] = await Promise.all([
+  const [all, requests, profile] = await Promise.all([
     listStudents(teacher.id),
     listPendingRequests(teacher.id),
     ensureTeacherProfile(teacher.id),
   ]);
 
+  const students = all
+    .filter(
+      (s) =>
+        matchesQuery(q, s.fullName, s.email, s.phone, s.telegram) &&
+        (!status || s.status === status),
+    )
+    .sort(
+      pickSort(sort, {
+        name: (a, b) => text(a.fullName, b.fullName),
+        recent: (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+        status: (a, b) => text(a.status, b.status),
+      }, "name"),
+    );
+
   return (
     <>
-      <PageHeader title="Ученики" description={`Всего: ${students.length}`} />
+      <PageHeader
+        title="Ученики"
+        description={`Показано: ${students.length} из ${all.length}`}
+      />
 
       <RequestList requests={requests} />
 
@@ -37,8 +61,34 @@ export default async function StudentsPage() {
         <StudentForm />
       </div>
 
+      <ListControls
+        search={{ placeholder: "Имя, почта, телефон" }}
+        filters={[
+          {
+            key: "status",
+            label: "Любой статус",
+            options: [
+              { value: "", label: "Любой статус" },
+              ...Object.entries(studentStatus).map(([value, m]) => ({
+                value,
+                label: m.label,
+              })),
+            ],
+          },
+        ]}
+        sort={[
+          { value: "name", label: "По имени" },
+          { value: "recent", label: "Сначала новые" },
+          { value: "status", label: "По статусу" },
+        ]}
+      />
+
       {students.length === 0 ? (
-        <EmptyState>Пока никого нет — добавьте первого ученика.</EmptyState>
+        <EmptyState>
+          {all.length === 0
+            ? "Пока никого нет — добавьте первого ученика."
+            : "Под фильтры никто не подходит."}
+        </EmptyState>
       ) : (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">

@@ -10,6 +10,7 @@ export async function listGroups(teacherId: string) {
       title: groups.title,
       status: groups.status,
       scheduleNote: groups.scheduleNote,
+      courseId: groups.courseId,
       courseTitle: courses.title,
       studentCount: count(enrollments.studentId),
     })
